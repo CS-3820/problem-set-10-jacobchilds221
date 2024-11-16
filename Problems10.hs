@@ -95,20 +95,27 @@ be replaced by the substitution?
 
 -------------------------------------------------------------------------------}
 
+-- Substitution helper that handles shadowing for Lam
 substUnder :: String -> Expr -> String -> Expr -> Expr
-substUnder x m y n 
-  | x == y = n
+substUnder x m y n
+  | x == y    = n
   | otherwise = subst x m n
 
+-- Main substitution function
 subst :: String -> Expr -> Expr -> Expr
 subst _ _ (Const i) = Const i
 subst x m (Plus n1 n2) = Plus (subst x m n1) (subst x m n2)
 subst x m (Var y) 
-  | x == y = m
+  | x == y    = m
   | otherwise = Var y
-subst x m (Lam y n) = Lam y (substUnder x m y n)
+subst x m (Lam y n) 
+  | x == y    = Lam y n  -- No substitution inside lambda if the variable is the same
+  | otherwise = Lam y (substUnder x m y n)
 subst x m (App n1 n2) = App (subst x m n1) (subst x m n2)
-subst x m n = undefined
+subst x m (Store n)   = Store (subst x m n)
+subst x m Recall       = Recall
+subst x m (Throw n)    = Throw (subst x m n)
+subst x m (Catch m' y n) = Catch (subst x m m') y (subst x m n)
 
 {-------------------------------------------------------------------------------
 
@@ -200,9 +207,35 @@ Lecture 12.  But be sure to handle *all* the cases where exceptions need to
 bubble; this won't *just* be `Throw` and `Catch.
 
 -------------------------------------------------------------------------------}
-
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
-smallStep = undefined
+smallStep (prog, acc) = case prog of
+  -- Handling `Plus` when both operands are not values
+  Plus (Const x) (Const y) -> Just (Const (x + y), acc)
+  Plus m n -> case (m, n) of
+    (_, Const _) -> Just (Plus (step m) n, acc)   -- Step the first operand
+    (Const _, _) -> Just (Plus m (step n), acc)   -- Step the second operand
+    _            -> Nothing  -- Cannot step further if no value is present
+  
+  -- Handling `Throw`, evaluate the expression inside first
+  Throw m -> Just (Throw (step m), acc)
+  
+  -- Handling `Catch`, step through the expression `m` first
+  Catch m y n -> 
+    case step m of
+      Throw w -> Just (subst y w n, acc)  -- Substitute `w` in `n` if exception is thrown
+      v       -> Just (v, acc)            -- Return value if no exception
+  
+  -- More cases for other expressions can be implemented similarly
+  _ -> Nothing
+
+-- Step function to perform the small-step reduction
+step :: Expr -> Expr
+step (Plus m n) = case m of
+  Const _ -> Plus m (step n)
+  _       -> Plus (step m) n
+step (Throw m) = Throw (step m)
+step (Catch m y n) = Catch (step m) y n
+step _ = error "Unhandled case"
 
 steps :: (Expr, Expr) -> [(Expr, Expr)]
 steps s = case smallStep s of
